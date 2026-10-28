@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Go2W · 运行控制</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,sans-serif;background:#10141b;color:#e4eaf3}*{box-sizing:border-box}body{margin:0;padding:28px}header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}h1{font-size:25px;margin:0}header small{color:#93a1b5;font-size:13px}.status{background:#202a36;padding:8px 14px;border-radius:20px;color:#a2b7cb;font-size:13px}main{display:grid;grid-template-columns:minmax(400px,1fr) 350px;gap:22px;max-width:1600px;margin:auto}.card{background:#19212d;border:1px solid #2c3748;border-radius:16px;overflow:hidden}.viewer{background:#080b10;display:flex;align-items:center;justify-content:center;min-height:400px}.viewer img{display:block;width:100%;aspect-ratio:4/3;object-fit:contain}.caption{padding:16px;color:#9cabc0;font-size:13px}.panel{padding:24px}h2{font-size:18px;margin:0 0 8px}.muted{color:#9cabc0;font-size:13px;line-height:1.7}.slider{margin:26px 0}.slider label{display:flex;justify-content:space-between;align-items:center;font-size:14px}output{font:600 21px ui-monospace,monospace;color:#64debf}input[type=range]{width:100%;accent-color:#58cfb1;margin:17px 0 5px;cursor:pointer}.bounds{display:flex;justify-content:space-between;color:#8292a7;font-size:12px}.actions{display:flex;gap:10px;margin:12px 0}button{cursor:pointer;border:1px solid #415067;border-radius:9px;background:#273448;color:#edf3fa;padding:11px 14px;font:inherit;font-size:14px;flex:1}button:hover{filter:brightness(1.2)}button.stop{background:#94404c;border-color:#c05b69;width:100%;font-weight:600}.telemetry{border-top:1px solid #344054;padding-top:20px;margin-top:24px}.metric{display:flex;justify-content:space-between;padding:8px 0;font-size:14px}.metric b{font-family:ui-monospace,monospace}.dot{color:#64debf}.note{margin-top:20px;font-size:12px;color:#8a9ab0;line-height:1.7}@media(max-width:900px){body{padding:16px}main{grid-template-columns:1fr}.viewer{min-height:200px}}
+select{background:#273448;color:#edf3fa;padding:8px;border:1px solid #415067;border-radius:6px;margin:5px}.viewer img{cursor:grab;touch-action:none;user-select:none}.viewer img:active{cursor:grabbing}
+</style>
+</head>
+<body>
+<header><div><h1>Go2W <span style="font-weight:400;color:#9cabc0">/ 运行控制</span></h1><small id="model">正在加载策略…</small></div><div class="status" id="connection">连接中</div></header>
+<main>
+<section class="card"><div class="viewer"><img id="frame" src="/frame.jpg" alt="Go2W 实时仿真画面"></div><div class="caption" id="caption">单环境 · CPU · 实时画面</div></section>
+<section class="card panel">
+<h2>地形与视角</h2>
+<div><select id="terrainKind" aria-label="地形"><option value="flat">平地</option><option value="up">上楼梯</option><option value="down">下楼梯</option><option value="platform">障碍平台</option><option value="slope">斜坡</option><option value="rubble">碎石地</option></select>
+<select id="terrainLevel" aria-label="难度"><option value="0">等级 0 · 2 cm / 3°</option><option value="1">等级 1 · 4 cm / 5.4°</option><option value="2">等级 2 · 8 cm / 7.8°</option><option value="3">等级 3 · 12 cm / 10.2°</option><option value="4">等级 4 · 16 cm / 12.6°</option><option value="5">等级 5 · 20 cm / 15°</option></select></div>
+<div class="actions"><button id="changeScene">切换地形</button><button id="resetCamera">恢复视角</button></div>
+<div class="muted">在画面上按住左键拖动旋转，滚轮缩放，双击恢复视角。镜头始终跟随机器人。切换地形会重置机器人。</div>
+
+<h2>键盘控制 · 速度大小</h2><div class="muted">↑↓ 前进/后退 · ←→ 横移 · Q/E 转向<br>按住移动，松开停止；滑条只调速度大小。</div><div class="muted" id="requested">当前指令：0 / 0 / 0</div>
+<div class="slider"><label for="vx">前进 / 后退 · vx <output id="vxout">0.00</output></label><input id="vx" type="range" min="0" max="2" step="0.01" value="0.3"><div class="bounds"><span>0 m/s</span><span>+2.00 m/s</span></div></div>
+<div class="slider"><label for="vy">左移 / 右移 · vy <output id="vyout">0.00</output></label><input id="vy" type="range" min="0" max="1" step="0.01" value="0.2"><div class="bounds"><span>0 m/s</span><span>+1.00 m/s</span></div></div>
+<div class="slider"><label for="yaw">左转 / 右转 · yaw rate <output id="yawout">0.00</output></label><input id="yaw" type="range" min="0" max="3" step="0.01" value="0.4"><div class="bounds"><span>0 rad/s</span><span>+3.00 rad/s</span></div></div>
+<button class="stop" id="stop">停止 · 空格</button><div class="actions"><button id="pause">暂停仿真</button><button id="reset">重置机器人</button></div>
+<div class="telemetry"><h2>实际速度</h2><div class="metric"><span>vx</span><b id="actual0">—</b></div><div class="metric"><span>vy</span><b id="actual1">—</b></div><div class="metric"><span>yaw rate</span><b id="actual2">—</b></div></div>
+<div class="note" id="note">切换标签页或关闭页面会归零。连接中断超过 2 秒也会归零。暂停会清空指令。</div>
+</section>
+</main>
+<script>
+const sliders=['vx','vy','yaw'].map(id=>document.getElementById(id));
+const connection=document.getElementById('connection');
+let dirty=false,busy=false,actionQueue=[],dragging=false;
+let cameraDelta=[0,0,0],pointer=null,sceneInitialized=false;
+const keys=new Set(),motionKeys=new Set(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","KeyQ","KeyE"]);
+function command(){
+ const x=Number(keys.has("ArrowUp"))-Number(keys.has("ArrowDown"));
+ const y=Number(keys.has("ArrowLeft"))-Number(keys.has("ArrowRight"));
+ const z=Number(keys.has("KeyQ"))-Number(keys.has("KeyE"));
+ const scale=Math.max(1,Math.hypot(x,y));
+ return [Number(sliders[0].value)*x/scale,Number(sliders[1].value)*y/scale,Number(sliders[2].value)*z];
+}
+function labels(){sliders.forEach(s=>document.getElementById(s.id+'out').textContent=Number(s.value).toFixed(2))}
+function zero(){keys.clear();dirty=true}
+function action(name){if(name!=='heartbeat'){zero();actionQueue.push(name)}}
+sliders.forEach(s=>{s.addEventListener('input',()=>{labels();dirty=true});s.addEventListener('pointerdown',()=>dragging=true)});
+window.addEventListener('pointerup',()=>dragging=false);
+document.getElementById('stop').onclick=()=>action('stop');
+document.getElementById('pause').onclick=()=>action('pause');
+document.getElementById('reset').onclick=()=>action('reset');
+window.addEventListener('keydown',e=>{
+ if(e.code==='Space'){e.preventDefault();action('stop');return}
+ if(motionKeys.has(e.code)){e.preventDefault();if(!e.repeat){keys.add(e.code);dirty=true}}
+});
+window.addEventListener('keyup',e=>{
+ if(motionKeys.has(e.code)){e.preventDefault();keys.delete(e.code);dirty=true}
+});
+window.addEventListener('blur',()=>{endDrag();action('stop');leave()});
+labels();
+function leave(){zero();navigator.sendBeacon('/api/control',JSON.stringify({action:'stop'}))}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)leave()});
+window.addEventListener('pagehide',leave);
+function show(s){
+ connection.textContent=s.loading?'正在切换地形…':s.ready?(s.paused?'已暂停':'● 已连接'):'仿真初始化中';
+ if(!sceneInitialized && s.terrain_kind){
+  document.getElementById('terrainKind').value=s.terrain_kind;
+  document.getElementById('terrainLevel').value=String(s.terrain_level);sceneInitialized=true;
+ }
+ document.getElementById('changeScene').disabled=!!s.loading||!s.terrain;
+ document.getElementById('pause').textContent=s.paused?'继续仿真':'暂停仿真';
+ document.getElementById('requested').textContent='当前指令：vx '+s.command[0].toFixed(2)+' / vy '+s.command[1].toFixed(2)+' / yaw '+s.command[2].toFixed(2);
+ (s.actual||[]).forEach((v,i)=>document.getElementById('actual'+i).textContent=Number(v).toFixed(3)+(i===2?' rad/s':' m/s'));
+ if(s.checkpoint)document.getElementById('model').textContent=s.checkpoint+' · 训练步数 '+s.iteration;
+ if(s.scene)document.getElementById('caption').textContent=s.scene+' · 单环境 · '+s.device+' · 渲染 '+Number(s.render_fps||0).toFixed(1)+' FPS · 实时倍率 '+Number(s.realtime_factor||0).toFixed(2)+'×';
+ if(s.terrain)document.getElementById('note').textContent=s.terrain_revision>=3?'新版训练指令范围：vx ±2 m/s，vy ±1 m/s，yaw ±3 rad/s。实际能力以评估为准。':'当前为前向地形策略。训练范围：vx 0.2–0.45 m/s，vy 0，yaw ±0.05 rad/s；反向和大幅转向尚未验证。切换标签页或断开连接后指令归零。';
+}
+async function tick(){
+ if(busy||document.hidden)return;busy=true;
+ try{
+  let body={action:'heartbeat'};
+  if(actionQueue.length){const item=actionQueue.shift();body=typeof item==='string'?{action:item}:item;}
+  else if(dirty){body={action:'command',values:command()};dirty=false}
+  if(cameraDelta.some(v=>v!==0)){body.camera_delta=cameraDelta;cameraDelta=[0,0,0]}
+  const response=await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(1500)});
+  if(!response.ok)throw Error(response.status);show(await response.json());
+ }catch(e){connection.textContent='连接已断开';zero()}finally{busy=false}
+}
+setInterval(tick,33);tick();
+const image=document.getElementById('frame');
+image.draggable=false;
+image.addEventListener('pointerdown',e=>{
+ if(e.button!==0)return;e.preventDefault();pointer={id:e.pointerId,x:e.clientX,y:e.clientY};image.setPointerCapture(e.pointerId);
+});
+image.addEventListener('pointermove',e=>{
+ if(!pointer||pointer.id!==e.pointerId)return;
+ cameraDelta[0]-=(e.clientX-pointer.x)*.4;cameraDelta[1]-=(e.clientY-pointer.y)*.3;
+ pointer.x=e.clientX;pointer.y=e.clientY;
+});
+function endDrag(){pointer=null}
+image.addEventListener('pointerup',endDrag);image.addEventListener('pointercancel',endDrag);image.addEventListener('lostpointercapture',endDrag);
+
+image.addEventListener('wheel',e=>{e.preventDefault();cameraDelta[2]+=Math.max(-1,Math.min(1,e.deltaY*(e.deltaMode===1?.03:e.deltaMode===2?.5:.001)));},{passive:false});
+function resetCamera(){cameraDelta=[0,0,0];actionQueue.push('camera_reset')}
+image.addEventListener('dblclick',resetCamera);
+document.getElementById('resetCamera').onclick=resetCamera;
+document.getElementById('changeScene').onclick=()=>{
+ zero();actionQueue.push({action:'scene',kind:document.getElementById('terrainKind').value,level:Number(document.getElementById('terrainLevel').value)});
+};
+function nextFrame(){setTimeout(()=>{if(!document.hidden)image.src='/frame.jpg?t='+Date.now();else nextFrame()},16)}
+image.onload=nextFrame;image.onerror=nextFrame;if(image.complete)nextFrame();
+</script>
+</body></html>
