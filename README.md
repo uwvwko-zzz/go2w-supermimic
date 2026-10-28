@@ -4,7 +4,7 @@
 
 ## 演示视频
 
-[观看 Go2W 仿真演示](assert/go2w-supermimic.mp4)
+https://github.com/user-attachments/assets/46d40ebe-21ee-4124-b646-20ba3c0927c9
 
 ## 世界模型
 
