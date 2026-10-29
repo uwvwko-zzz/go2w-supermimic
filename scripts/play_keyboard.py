@@ -119,6 +119,10 @@ def main():
   from go2w_supermimic.core.policy import evaluation_env_cfg
   cfg = evaluation_env_cfg(checkpoint, args.terrain_level, args.terrain_kind)
   cfg.scene.num_envs = 1
+  # Interactive playback continues through falls, contacts and course exits.
+  # mjlab disallows further steps after a termination with auto_reset=False.
+  cfg.auto_reset = False
+  cfg.terminations = {}
   cfg.seed = 0
   cfg.episode_length_s = 1e9  # No automatic timed teleport during keyboard play.
   cfg.commands["twist"] = keyboard_command_cfg(controls)
@@ -184,9 +188,6 @@ def main():
         obs, _, terminated, _, _ = env.step(bridge.env_action(action))
         if not torch.isfinite(obs["actor"]).all():
           raise RuntimeError("Non-finite observation")
-        if terminated.any():
-          controls.clear()
-          print("Fall reset; keys cleared.", flush=True)
         if pg or video:
           rgb = env.render()
           if video:

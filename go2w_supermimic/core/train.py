@@ -13,7 +13,7 @@ import torch
 
 from .bridge import Go2WBridge, pose_delta
 from .world_model import Go2WWorldModel
-from .policy import Actor, Network, FRAME_DIM, CRITIC_DIM, POLICY_FORMAT, critic_input
+from .policy import Actor, Network, FRAME_DIM, CRITIC_DIM, POLICY_FORMAT, critic_input, checkpoint_wheel_vel
 from .replay import Replay
 from .imagine import frozen, rollout, make_imagined_step
 from .recovery import recover_invalid_envs
@@ -23,10 +23,13 @@ def constants_from_bridge(bridge):
   """Fixed gains/limits of this Go2W task; no per-environment gain randomization."""
   d, dev = bridge.robot.data, bridge.env.device
   from .terrain_posture import env_posture_cost, LEG_SCALES
-  revised = bridge.env.cfg.rewards["leg_posture"].func is env_posture_cost
+  revised = bridge.env.cfg.rewards["leg_posture"].func is env_posture_cost or "wheel_obstacle_clearance" in bridge.env.cfg.rewards
   return {
     "terrain_posture_v2": revised,
+    "nonwheel_collision": "illegal_nonwheel_contact" in bridge.env.cfg.terminations,
+    "wheel_local_rewards": "wheel_obstacle_clearance" in bridge.env.cfg.rewards,
     "rolling_rewards": "unnecessary_wheel_lift" in bridge.env.cfg.rewards,
+    "obstacle_progress": "obstacle_progress" in bridge.env.cfg.rewards,
     "wheel_action_scale": bridge.env.cfg.actions["wheel_vel"].scale,
     "leg_action_scale": torch.tensor(LEG_SCALES if revised else (.25,) * 12, device=dev),
     "terrain_rewards": hasattr(bridge, "field"),
@@ -41,7 +44,7 @@ def constants_from_bridge(bridge):
 
 def actor_learning_rate(args, iteration):
   age = max(0, iteration - args.actor_schedule_start)
-  progress = min(1., age / max(1, args.lr_decay_iterations))
+  progress = min(1., max(0, age - args.actor_hold_iterations) / max(1, args.lr_decay_iterations))
   decay = args.lr_final_frac + (1.-args.lr_final_frac)*.5*(1.+math.cos(math.pi*progress))
   ramp = min(1., (age+1) / max(1, args.actor_ramp_iterations))
   return args.lr * args.actor_lr_scale * decay * ramp
@@ -77,12 +80,13 @@ class Learner:
       from .terrain import SCAN_DIM
       self.model_class, self.format, extra = TerrainWorldModel, TERRAIN_FORMAT, SCAN_DIM
     self.model = self.model_class(tuple(args.wm_hidden), **(
-      {"contacts":args.terrain_revision >= 4} if field is not None else {})).to(args.device)
+      {"contacts":args.terrain_revision >= 4, "collisions":args.terrain_revision >= 7} if field is not None else {})).to(args.device)
     self.actor = Actor(args.history, tuple(args.actor_hidden)).to(args.device)
     self.critic = Network(CRITIC_DIM + extra, 1, tuple(args.critic_hidden)).to(args.device)
     self.target = copy.deepcopy(self.critic)
     self.optimizers = [torch.optim.Adam(module.parameters(), lr=args.lr)
                        for module in (self.model, self.actor, self.critic)]
+    self.curriculum_state = None
     self.policy_updates = 0
     self.skipped_updates = 0
     self.terrain_state = None
@@ -144,11 +148,13 @@ class Learner:
     checkpoint = {
       "training_algorithm": "go2w-full-return-events-v1",
       "format": self.format, "step": step, "history": self.actor.history,
+      "actor_wheel_vel": False,
       "actor_hidden": self.actor.hidden, "actor": self.actor.state_dict(),
       "world_model": self.model.checkpoint(), "critic": self.critic.state_dict(),
       "target_critic": self.target.state_dict(), "config": vars(self.args),
       "optimizers": [o.state_dict() for o in self.optimizers],
       "terrain_state": self.terrain_state,
+      "curriculum_state": self.curriculum_state,
       "env_steps": self.env_steps,
       "policy_updates": self.policy_updates, "env_action_order": list(env_order), "dt": dt,
     }
@@ -170,6 +176,8 @@ class Learner:
       raise ValueError("Terrain resume requires the same terrain seed")
     if ckpt["config"].get("terrain_revision", 1) != getattr(self.args, "terrain_revision", 1):
       raise ValueError("Terrain revision/action scale differs; start a new run for a different revision")
+    if checkpoint_wheel_vel(ckpt):
+      raise ValueError("Legacy actor uses measured wheel speeds; start a new run for the 245D actor")
     self.actor.load_state_dict(ckpt["actor"])
     self.model.load_state_dict(self.model_class.from_checkpoint(ckpt["world_model"]).state_dict())
     self.critic.load_state_dict(ckpt["critic"])
@@ -178,6 +186,7 @@ class Learner:
       optimizer.load_state_dict(data)
     self.policy_updates = ckpt["policy_updates"]
     self.terrain_state = ckpt.get("terrain_state")
+    self.curriculum_state = ckpt.get("curriculum_state")
     self.env_steps = ckpt.get("env_steps", ckpt["step"] * ckpt["config"].get("num_steps_per_env", 1))
     return ckpt["step"]
 
@@ -190,7 +199,7 @@ def parser():
                         ("warmup", 300), ("critic-epochs", 5), ("save-interval", 1000),
                         ("log-interval", 50), ("seed", 0), ("num-steps-per-env", 1), ("critic-minibatches", 4),
                         ("archive-size", 100000), ("actor-ramp-iterations", 1000),
-                        ("lr-decay-iterations", 30000), ("actor-schedule-start", 0)):
+                        ("lr-decay-iterations", 30000), ("actor-hold-iterations", 0), ("actor-schedule-start", 0)):
     p.add_argument("--" + name, type=int, default=default)
   for name, default in (("lr", 2e-4), ("action-noise", 0.15), ("gamma", 0.99), ("lam", 0.95)):
     p.add_argument("--" + name, type=float, default=default)
@@ -204,8 +213,8 @@ def parser():
   p.add_argument("--critic-hidden", type=int, nargs="+", default=[256, 128, 64])
   p.add_argument("--device", default="cuda:0")
   p.add_argument("--terrain", action="store_true", help="Blind static rough-terrain task")
-  p.add_argument("--terrain-revision", type=int, choices=(1, 2, 3, 4), default=1,
-                 help="2: larger leg actions; 3: bidirectional commands; 4: rolling rewards and 30cm stairs; new run required")
+  p.add_argument("--terrain-revision", type=int, choices=(1, 2, 3, 4, 5, 6, 7), default=1,
+                 help="2: larger leg actions; 3: bidirectional commands; 4: rolling rewards and 30cm stairs; 5: performance-gated stair curriculum; 6: wheel-local clearance; 7: v5 plus non-wheel collision termination; new run required")
   p.add_argument("--command-curriculum", action="store_true", help="Progressively widen velocity ranges")
   p.add_argument("--command-curriculum-start", type=int, default=0, help="Learner iteration where the velocity schedule starts; preserve on resume")
   p.add_argument("--init-actor", default="", help="Initialize only the actor from a flat policy; dynamics/critic start fresh")
@@ -227,6 +236,10 @@ def main():
     p.error("Invalid optimizer, noise or return parameters")
   if args.actor_lr_scale <= 0 or not 0 < args.lr_final_frac <= 1 or args.actor_ramp_iterations < 0 or args.actor_grad_clip_element <= 0:
     p.error("Invalid actor learning-rate/gradient protection")
+  if args.actor_hold_iterations < 0:
+    p.error("actor-hold-iterations must be nonnegative")
+  if args.terrain_revision >= 5 and (not args.command_curriculum or args.archive_size < 2):
+    p.error("terrain v5 requires command-curriculum and archive-size >=2")
   if args.prioritized_replay and (not args.terrain or args.terrain_revision < 4):
     p.error("prioritized-replay requires measured contacts from terrain revision >=4")
   from mjlab.envs import ManagerBasedRlEnv
@@ -268,16 +281,20 @@ def main():
         raise ValueError("init-actor requires a matching flat Go2W actor")
       if ckpt["env_action_order"] != list(bridge.to_env) or abs(ckpt["dt"]-env.step_dt)>1e-8:
         raise ValueError("Warm-start action contract differs")
+      if checkpoint_wheel_vel(ckpt):
+        raise ValueError("Cannot initialize a 245D actor from a legacy wheel-speed actor")
       learner.actor.load_state_dict(ckpt["actor"])
     constants = constants_from_bridge(bridge)
     weights = {name: term.weight for name, term in cfg.rewards.items()}
     contact_targets = args.terrain and args.terrain_revision >= 4
     replay = Replay(args.buffer_len, args.num_envs, args.device, FRAME_DIM * args.history,
-                    terrain=args.terrain, contacts=contact_targets)
+                    terrain=args.terrain, contacts=contact_targets, courses=args.terrain_revision >= 5, collisions=args.terrain_revision >= 7)
     start = learner.load(args.resume, bridge.to_env, env.step_dt) if args.resume else 0
     if args.command_curriculum:
       set_command_stage(env.command_manager.get_term("twist").cfg,
-                        start - args.command_curriculum_start)
+                        start - args.command_curriculum_start,
+                        stage=(int(learner.curriculum_state['stage']) if learner.curriculum_state else 0)
+                        if args.terrain_revision >= 5 else None)
     if args.terrain and learner.terrain_state is not None:
       terrain = env.scene.terrain
       levels = learner.terrain_state["levels"].to(args.device)
@@ -288,6 +305,15 @@ def main():
       terrain.terrain_types.copy_(types)
       terrain.env_origins.copy_(terrain.terrain_origins[levels, types])
       obs, _ = env.reset()
+    if args.terrain_revision >= 5:
+      from .stair_curriculum import buffers, next_stage, summary
+      stats = buffers(env)
+      saved = learner.curriculum_state
+      command_stage = int(saved['stage']) if saved else 0
+      velocity_ema = saved['velocity_ema'] if saved else [1., 1., 1.]
+      if saved:
+        stats.copy_(saved['stats'].to(env.device))
+      set_command_stage(env.command_manager.get_term('twist').cfg, 0, stage=command_stage)
     if start >= args.iterations:
       raise ValueError("iterations must exceed the resumed checkpoint step")
     if obs["actor"].shape[-1] != FRAME_DIM * args.history:
@@ -297,7 +323,9 @@ def main():
     previous = torch.zeros(args.num_envs, 16, device=args.device)
     ou = torch.zeros_like(previous)
     totals = torch.zeros(6, device=args.device)
+    reward_totals = torch.zeros(len(env.reward_manager.active_terms), device=args.device)
     interval_steps = 0
+    nonwheel_terminations = 0
     invalid_env_resets = 0
     began = time.monotonic()
     print(f"Go2W replay storage: {sum(t.numel() * t.element_size() for t in replay.data.values()) / 2**20:.1f} MiB", flush=True)
@@ -305,7 +333,7 @@ def main():
       for step in range(start, args.iterations):
         for group in learner.optimizers[1].param_groups:
           group["lr"] = actor_learning_rate(args, step)
-        if args.command_curriculum:
+        if args.command_curriculum and args.terrain_revision < 5:
           command_stage = set_command_stage(env.command_manager.get_term("twist").cfg,
                                              step - args.command_curriculum_start)
         for _ in range(args.num_steps_per_env):
@@ -319,6 +347,10 @@ def main():
             learner.target.norm.load_state_dict(learner.critic.norm.state_dict())
             ou = 0.95 * ou + (1 - 0.95**2)**0.5 * torch.randn_like(ou)
             action = (learner.actor(history) + args.action_noise * ou).clamp(-1., 1.)
+            if args.terrain_revision >= 5:
+              course_types = env.scene.terrain.terrain_types.clone()
+              course_levels = env.scene.terrain.terrain_levels.clone()
+              course_origins = env.scene.env_origins.clone()
             obs, real_reward, terminated, truncated, _ = env.step(bridge.env_action(action))
             terminated, truncated = terminated.clone(), truncated.clone()
             obs, bad = recover_invalid_envs(env, obs, real_reward)
@@ -327,15 +359,33 @@ def main():
             real_reward = torch.where(bad, torch.zeros_like(real_reward), real_reward)
             nxt, delta = bridge.state(), pose_delta(pose, bridge.pose())
             measured = torch.cat((nxt[:, 4:6], nxt[:, 9:10]), -1)
+            reward_totals += env.reward_manager._step_reward[~bad].sum(0)
             totals[0] += real_reward.sum()
             totals[1] += terminated.sum()
             totals[2] += valid.sum()
             totals[3:] += (measured[valid] - command[valid]).abs().sum(0)
             interval_steps += 1
+            course_data = {}
+            if args.terrain_revision >= 7:
+              label_valid = env._nonwheel_label_valid & ~bad & torch.isfinite(state).all(-1)
+              course_data.update(collision=env._nonwheel_hit[:,None].float(),
+                                 collision_valid=label_valid[:,None].float())
+              nonwheel_terminations += int((env._nonwheel_hit & label_valid).sum())
+            if args.terrain_revision >= 5:
+              new_pose = bridge.pose()
+              ground_rise = field.sample(new_pose[:,:2]) - field.sample(pose[:,:2])
+              forward_motion = (delta[:,:2] * command[:,:2]).sum(-1) > 0
+              offset = bridge.robot.data.root_link_pos_w - course_origins
+              from .stair_curriculum import stair_pass
+              reached = stair_pass(offset, bridge.robot.data.projected_gravity_b, course_levels, course_types == 1)
+              crossing = (pose[:,0] - course_origins[:,0]).abs() <= 2.8
+              useful = (ground_rise > .005) & forward_motion & valid
+              course_data['course'] = torch.stack((course_types.float(), course_levels.float(),
+                                                   useful.float(), (reached & crossing & valid).float()), -1)
             replay.add(state=state, action=action, previous=previous, context=context,
                        next=nxt, pose=delta, valid=valid[:, None], history=history,
                        command=command, bias=bias, **({"world_pose": pose} if args.terrain else {}),
-                       **({"next_contacts":bridge.contacts()} if contact_targets else {}))
+                       **({"next_contacts":bridge.contacts()} if contact_targets else {}), **course_data)
             if valid.any():
               model_context = context if field is None else torch.cat((context, field.scan(state, pose)), -1)
               learner.model.update_stats(state[valid], action[valid], previous[valid], model_context[valid],
@@ -364,10 +414,21 @@ def main():
                      policy_updates=learner.policy_updates,
                      skipped_updates=learner.skipped_updates, invalid_env_resets=invalid_env_resets,
                      elapsed_s=time.monotonic() - began)
+          if args.terrain_revision >= 7:
+            row['nonwheel_terminations'] = nonwheel_terminations
           if args.terrain:
             row.update({k:v.item() for k,v in learner.model.last_contact_metrics.items()})
             row["terrain_level_mean"] = env.scene.terrain.terrain_levels.float().mean().item()
             row["terrain_level_max"] = env.scene.terrain.terrain_levels.max().item()
+          if args.terrain_revision >= 5:
+            velocity_ema = [.9*a + .1*b for a,b in zip(velocity_ema, row['velocity_mae'])]
+            row['terrain_details'] = summary(env)
+            row['weighted_reward_terms'] = dict(zip(env.reward_manager.active_terms,
+              (reward_totals / (interval_steps * args.num_envs)).tolist()))
+            row['success_archive_windows'] = 0 if replay.success_archive is None else replay.success_archive.size
+            promoted = next_stage(command_stage, step + 1 - args.command_curriculum_start,
+                                  env._stair_stats.cpu().numpy(), velocity_ema)
+            row['next_command_stage'] = promoted
           if args.command_curriculum:
             ranges = env.command_manager.get_term("twist").cfg.ranges
             row.update(command_stage=command_stage, command_ranges=[ranges.lin_vel_x, ranges.lin_vel_y, ranges.ang_vel_z])
@@ -377,12 +438,20 @@ def main():
           log.write(json.dumps(row) + "\n")
           log.flush()
           print(json.dumps(row), flush=True)
+          if args.terrain_revision >= 5 and promoted != command_stage:
+            command_stage = promoted
+            env._stair_stats.zero_()  # Fresh performance window for the next stage.
+            set_command_stage(env.command_manager.get_term('twist').cfg, 0, stage=command_stage)
+          reward_totals.zero_()
           totals.zero_()
           interval_steps = 0
         if (step + 1) % args.save_interval == 0 or step + 1 == args.iterations:
           if args.terrain:
             learner.terrain_state = {"levels": env.scene.terrain.terrain_levels.cpu().clone(),
                                      "types": env.scene.terrain.terrain_types.cpu().clone()}
+          if args.terrain_revision >= 5:
+            learner.curriculum_state = dict(stage=command_stage, velocity_ema=velocity_ema,
+                                             stats=env._stair_stats.detach().cpu().clone())
           learner.save(output / f"model_{step + 1}.pt", step + 1, bridge.to_env, env.step_dt)
     print(f"Go2W training complete: {output}")
   finally:

@@ -39,7 +39,7 @@ def reward_terms(state, action, previous, command, constants, survival_prob, sca
   limits = ((constants["limits"][..., 0] - absolute_q).clamp_min(0)
             + (absolute_q - constants["limits"][..., 1]).clamp_min(0)).sum(-1)
   posture = q.square().sum(-1)
-  if constants.get("terrain_posture_v2", False):
+  if constants.get("terrain_posture_v2", False) and not constants.get("wheel_local_rewards", False):
     if scan is None:
       raise ValueError("Terrain v2 posture reward requires the privileged scan")
     from .terrain_posture import posture_cost
@@ -60,11 +60,17 @@ def reward_terms(state, action, previous, command, constants, survival_prob, sca
     "terminated": 1. - survival_prob,
   }
 
-  if constants.get("rolling_rewards", False):
+  if constants.get("rolling_rewards", False) and not constants.get("wheel_local_rewards", False):
     if scan is None:
       raise ValueError("Rolling rewards require a terrain scan")
     from .rolling_rewards import rolling_costs
     terms.update(rolling_costs(state, command, scan, constants["default_q"]))
+  if constants.get("obstacle_progress", False):
+    from .obstacle_rewards import obstacle_progress
+    terms["obstacle_progress"] = obstacle_progress(state, command, scan)
+  if constants.get("wheel_local_rewards", False):
+    from .wheel_terrain_rewards import wheel_terms
+    terms.update(wheel_terms(state, command, scan, constants["default_q"]))
   return terms
 
 
@@ -94,12 +100,19 @@ def make_imagined_step(model, actor, constants, weights, env_action_order,
   def step(state, previous, history, pose, scan, command, context, bias):
     action = actor(history)
     model_context = context if field is None else torch.cat((context, scan), -1)
-    nxt, delta = model(state, action, previous, model_context)
+    collision_prob = None
+    if constants.get('nonwheel_collision', False):
+      nxt, delta, _, collision_logit = model.forward_all(state, action, previous, model_context)
+      collision_prob = collision_logit.squeeze(-1).sigmoid()
+    else:
+      nxt, delta = model(state, action, previous, model_context)
     if field is not None:
       from .terrain import advance_pose
       pose = advance_pose(pose, delta)
     next_scan = None if field is None else field.scan(nxt, pose)
     cont = survival(nxt)
+    if collision_prob is not None:
+      cont = cont * (1. - collision_prob)
     terms = reward_terms(nxt, action, previous, command, constants, cont,
                          scan=next_scan)
     reward = dt * sum(weights[name] * value for name, value in terms.items())

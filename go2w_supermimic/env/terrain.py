@@ -142,10 +142,10 @@ def bidirectional_curriculum(env, env_ids):
   return terrain.terrain_levels.float().mean()
 
 
-def go2w_velocity_terrain_env_cfg(play=False, history=5, seed=0, revision=1):
-  if revision not in (1, 2, 3, 4):
-    raise ValueError("Terrain revision must be 1, 2, 3 or 4")
-  cfg = go2w_velocity_flat_env_cfg(play=play, history=history)
+def go2w_velocity_terrain_env_cfg(play=False, history=5, seed=0, revision=1, actor_wheel_vel=False):
+  if revision not in (1, 2, 3, 4, 5, 6, 7):
+    raise ValueError("Terrain revision must be 1, 2, 3, 4, 5, 6 or 7")
+  cfg = go2w_velocity_flat_env_cfg(play=play, history=history, actor_wheel_vel=actor_wheel_vel)
   cfg.sim.nconmax = 128
   cfg.sim.njmax = 512
   cfg.scene.terrain.terrain_type = "generator"
@@ -187,7 +187,7 @@ def go2w_velocity_terrain_env_cfg(play=False, history=5, seed=0, revision=1):
       course.bidirectional = True
     cfg.curriculum = {} if play else {"course": CurriculumTermCfg(func=bidirectional_curriculum)}
     cfg.terminations["course_exit"] = TerminationTermCfg(func=bidirectional_exit, time_out=True)
-  if revision == 4:
+  if revision >= 4:
     from mjlab.sensor import ContactMatch, ContactSensorCfg
     cfg.scene.sensors = tuple(cfg.scene.sensors or ()) + (ContactSensorCfg(
       name="wheel_ground_contact", primary=ContactMatch(mode="body",
@@ -202,4 +202,32 @@ def go2w_velocity_terrain_env_cfg(play=False, history=5, seed=0, revision=1):
     if not play:
       from go2w_supermimic.core.mixed_commands import MixedVelocityCommandCfg
       cfg.commands["twist"] = MixedVelocityCommandCfg(**vars(command))
+  if revision >= 5:
+    from go2w_supermimic.core.obstacle_rewards import env_obstacle_progress
+    from go2w_supermimic.core.stair_curriculum import curriculum
+    cfg.rewards['obstacle_progress'] = RewardTermCfg(func=env_obstacle_progress, weight=.5)
+    if not play:
+      cfg.curriculum = {'course': CurriculumTermCfg(func=curriculum)}
+      cfg.commands['twist'].hold_stair_command = True
+    for kind, weight in zip(('flat','up','down','platform','slope','rubble'), (.1,.35,.15,.1,.1,.2)):
+      cfg.scene.terrain.terrain_generator.sub_terrains[kind].proportion = weight
+  if revision == 6:
+    from go2w_supermimic.core.wheel_terrain_rewards import env_wheel_term
+    for name in ('leg_posture', 'unnecessary_wheel_lift', 'rolling_leg_motion'):
+      cfg.rewards[name].func = env_wheel_term
+      cfg.rewards[name].params = {'term': name}
+    cfg.rewards['wheel_obstacle_clearance'] = RewardTermCfg(
+      func=env_wheel_term, weight=-.25, params={'term':'wheel_obstacle_clearance'})
+  if revision >= 7:
+    from go2w_supermimic.core.collision import illegal_nonwheel_contact
+    # V7 = V5 + non-wheel collisions; experimental V6 shaping is independent.
+    cfg.scene.sensors += (ContactSensorCfg(
+      name='nonwheel_ground_contact',
+      primary=ContactMatch(mode='body', pattern='.*', entity='robot',
+                           exclude=tuple(f'{leg}_wheel_link' for leg in ('FL','FR','RL','RR'))),
+      secondary=ContactMatch(mode='body', pattern='terrain'),
+      fields=('found','force'), reduce='netforce', num_slots=1,
+      history_length=cfg.decimation),)
+    cfg.terminations['illegal_nonwheel_contact'] = TerminationTermCfg(
+      func=illegal_nonwheel_contact, params={'force_threshold':10.})
   return cfg

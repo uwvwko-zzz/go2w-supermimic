@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "go2w-supermimic"
+version = "0.1.0"
+description = "Go2W blind wheel-legged locomotion with SuperMimic model-based RL in mjlab"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Ziyue Zheng", email = "zzheng60@jh.edu" }]
+requires-python = ">=3.10"
+dependencies = [
+  "mjlab>=1.6.0",
+  "torch",
+  "matplotlib",
+  "mediapy",
+  "pillow",
+  "tensorboard",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+keyboard = ["pygame>=2.5"]
+
+[tool.setuptools.packages.find]
+include = ["go2w_supermimic*"]
+
+[tool.setuptools.package-data]
+go2w_supermimic = ["core/gui.html", "robot/LICENSE_menagerie_go2", "robot/model/go2w.xml", "robot/model/README.md", "robot/model/assets/*"]

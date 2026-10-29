@@ -5,17 +5,22 @@ from .world_model import STATE_DIM, ACTION_DIM, CONTEXT_DIM
 
 
 class Replay:
-  def __init__(self, length, num_envs, device, history_dim=0, terrain=False, contacts=False):
+  def __init__(self, length, num_envs, device, history_dim=0, terrain=False, contacts=False, courses=False, collisions=False):
     if min(length, num_envs) < 1:
       raise ValueError("Replay length and environment count must be positive")
     self.length, self.size, self.cursor = length, 0, 0
     self.archive = None
+    self.success_archive = None
     dims = dict(state=STATE_DIM, action=ACTION_DIM, previous=ACTION_DIM,
                 context=CONTEXT_DIM, next=STATE_DIM, pose=3, valid=1)
     if terrain:
       dims["world_pose"] = 3
     if contacts:
       dims["next_contacts"] = 16
+    if collisions:
+      dims.update(collision=1, collision_valid=1)
+    if courses:
+      dims["course"] = 4  # type, level, uphill ground transition, top crossing
     if history_dim:
       dims.update(history=history_dim, command=3, bias=12)
     self.data = {k: torch.zeros(length, num_envs, dim, device=device) for k, dim in dims.items()}
@@ -47,6 +52,8 @@ class Replay:
       return self.sample(batch, window, keys)
     if self.archive is None:
       self.archive = WindowArchive(capacity)
+    if 'course' in self.data:
+      return self._sample_courses(batch, window, capacity, keep_prob)
     n_priority = int(batch * prioritized)
     n_archive = int(batch * archived) if self.archive.size else 0
     parts = [self.sample(batch-n_priority-n_archive, window, keys)]
@@ -60,6 +67,41 @@ class Replay:
     if n_archive:
       parts.append(self.archive.sample(n_archive))
     return {k:torch.cat([p[k] for p in parts]) for k in parts[0]}
+
+
+  def _sample_courses(self, batch, window, capacity, keep_prob):
+    # Total archive capacity remains bounded by --archive-size, split evenly.
+    if self.success_archive is None:
+      self.archive = WindowArchive(max(1, capacity // 2))
+      self.success_archive = WindowArchive(max(1, capacity - capacity // 2))
+    keys = tuple(k for k in self.data if k not in ('history', 'command', 'bias'))
+    n_priority = batch // 4
+    candidates = self.sample(max(1, n_priority * 4), window, keys)
+    score, rare = event_scores(candidates)
+    valid = candidates['valid'].squeeze(-1).bool().cumprod(1).bool()
+    tag = candidates['course']
+    moving = (candidates['pose'][:, :, :2].norm(dim=-1) > .001) & valid
+    up = tag[:, :, 0] == 1
+    useful = ((tag[:, :, 2:] > .5).any(-1) & valid & up).any(-1)
+    # Do not fill the general archive with repeated stationary stair impacts.
+    rare &= (~up.any(-1) | moving.any(-1))
+    if 'collision' in candidates:
+      from .collision import collision_events
+      rare |= collision_events(candidates)
+    for archive, chosen in ((self.archive, rare), (self.success_archive, useful)):
+      chosen = chosen & (torch.rand_like(score) < keep_prob)
+      archive.add({k:v[chosen] for k,v in candidates.items()})
+    n_success = batch // 8 if self.success_archive.size else 0
+    n_rare = batch // 8 if self.archive.size else 0
+    # At least half the batch is always uniform replay, including when sparse.
+    parts = [self.sample(batch - n_priority - n_success - n_rare, window, keys)]
+    if n_priority:
+      rank = score + 8 * useful.float() + 2 * (moving & up).any(-1).float()
+      selected = (rank + .001 * torch.rand_like(rank)).topk(n_priority).indices
+      parts.append({k:v[selected] for k,v in candidates.items()})
+    if n_success: parts.append(self.success_archive.sample(n_success))
+    if n_rare: parts.append(self.archive.sample(n_rare))
+    return {k:torch.cat([part[k] for part in parts]) for k in keys}
 
 
 def event_scores(w):
@@ -82,7 +124,13 @@ def event_scores(w):
   ended = ((~valid) & torch.cat((torch.ones_like(mask[:,:1]),mask[:,:-1]),1)).any(-1)
   score = changes.float() + flight.float() + 4.*ended + 2.*impact
   rare = ((flight>=2) | hard_vz | impact | ended) & mask[:,0]
-  return score * mask[:,0], rare
+  score = score * mask[:,0]
+  if 'collision' in w:
+    from .collision import collision_events
+    collision = collision_events(w)
+    score = score + 8.*collision
+    rare |= collision
+  return score, rare
 
 
 class WindowArchive:

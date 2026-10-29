@@ -32,9 +32,13 @@ class MixedVelocityCommand(UniformVelocityCommand):
     for i, bounds in enumerate((self.cfg.ranges.lin_vel_x, self.cfg.ranges.lin_vel_y, self.cfg.ranges.ang_vel_z)):
       mixed[:,i].clamp_(*bounds)
     self.vel_command_b[env_ids] = mixed
+    if self.cfg.hold_stair_command:
+      self.time_left[env_ids[stairs]] = self._env.cfg.episode_length_s + 1.
+
 
 
 @dataclass(kw_only=True)
 class MixedVelocityCommandCfg(UniformVelocityCommandCfg):
+  hold_stair_command: bool = False
   def build(self, env):
     return MixedVelocityCommand(self,env)

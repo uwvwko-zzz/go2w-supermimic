@@ -8,8 +8,8 @@ STAGES = (
 )
 
 
-def set_command_stage(cfg, iteration):
-  index = max(i for i, stage in enumerate(STAGES) if max(0,iteration) >= stage[0])
+def set_command_stage(cfg, iteration, stage=None):
+  index = stage if stage is not None else max(i for i, item in enumerate(STAGES) if max(0,iteration) >= item[0])
   _, x, y, yaw = STAGES[index]
   cfg.ranges.lin_vel_x, cfg.ranges.lin_vel_y, cfg.ranges.ang_vel_z = x, y, yaw
   return index

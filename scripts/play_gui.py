@@ -44,9 +44,14 @@ def main():
     actor = load_actor(checkpoint, args.device)
     # Retain only metadata required to rebuild a scene, not training tensors.
     checkpoint = {k: checkpoint[k] for k in ("format", "history", "config", "env_action_order", "dt", "step")}
+    checkpoint["actor_wheel_vel"] = actor.actor_wheel_vel
     def build_scene(kind, level):
       cfg = evaluation_env_cfg(checkpoint, level, kind)
       cfg.scene.num_envs = 1
+      # Interactive playback continues through falls, contacts and course exits.
+      # mjlab disallows further steps after a termination with auto_reset=False.
+      cfg.auto_reset = False
+      cfg.terminations = {}
       # Playback only needs the actor: no training rewards, terrain reward scans,
       # critic observations or training metrics are consumed by the GUI.
       cfg.rewards = {}
@@ -112,8 +117,6 @@ def main():
           obs, _, terminated, truncated, _ = env.step(bridge.env_action(action))
           if not torch.isfinite(obs["actor"]).all():
             raise RuntimeError("Non-finite observation")
-          if (terminated | truncated).any():
-            state.clear()
           step += 1
         d = bridge.robot.data
         actual = [d.root_link_lin_vel_b[0, 0].item(), d.root_link_lin_vel_b[0, 1].item(),

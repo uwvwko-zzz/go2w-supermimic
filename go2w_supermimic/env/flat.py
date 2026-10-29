@@ -43,7 +43,7 @@ def standstill_cost(env, wheel_cfg: SceneEntityCfg) -> torch.Tensor:
   return standing * cost
 
 
-def go2w_velocity_flat_env_cfg(play: bool = False, history: int = ACTOR_HISTORY):
+def go2w_velocity_flat_env_cfg(play: bool = False, history: int = ACTOR_HISTORY, actor_wheel_vel: bool = False):
   if history < 1:
     raise ValueError("history must be at least 1")
   cfg = make_velocity_env_cfg()
@@ -70,7 +70,7 @@ def go2w_velocity_flat_env_cfg(play: bool = False, history: int = ACTOR_HISTORY)
       scale=15.0, use_default_offset=False, clip={".*": (-35.0, 35.0)},
     ),
   }
-  # 53 values/frame, 265 with five frames. No absolute wheel angles or oracle
+  # 49 values/frame, 245 with five frames. No measured wheel speed or oracle
   # linear velocity in the actor; the critic may observe true linear velocity.
   terms = {
     "base_ang_vel": ObservationTermCfg(
@@ -93,6 +93,8 @@ def go2w_velocity_flat_env_cfg(play: bool = False, history: int = ACTOR_HISTORY)
   critic = deepcopy(terms)
   critic["joint_pos"].params["biased"] = False
   critic["base_lin_vel"] = ObservationTermCfg(func=mdp.base_lin_vel)
+  if not actor_wheel_vel:
+    terms.pop("wheel_vel")
   cfg.observations = {
     "actor": ObservationGroupCfg(terms=terms, concatenate_terms=True,
                                  enable_corruption=not play, history_length=history),

@@ -19,7 +19,7 @@ select{background:#273448;color:#edf3fa;padding:8px;border:1px solid #415067;bor
 <div class="actions"><button id="changeScene">切换地形</button><button id="resetCamera">恢复视角</button></div>
 <div class="muted">在画面上按住左键拖动旋转，滚轮缩放，双击恢复视角。镜头始终跟随机器人。切换地形会重置机器人。</div>
 
-<h2>键盘控制 · 速度大小</h2><div class="muted">↑↓ 前进/后退 · ←→ 横移 · Q/E 转向<br>按住移动，松开停止；滑条只调速度大小。</div><div class="muted" id="requested">当前指令：0 / 0 / 0</div>
+<h2>键盘控制 · 速度大小</h2><div class="muted">W/S 或 ↑↓ 前进/后退 · A/D 或 ←→ 横移 · Q/E 转向<br>按住移动，松开停止；滑条只调速度大小。</div><div class="muted" id="requested">当前指令：0 / 0 / 0</div>
 <div class="slider"><label for="vx">前进 / 后退 · vx <output id="vxout">0.00</output></label><input id="vx" type="range" min="0" max="2" step="0.01" value="0.3"><div class="bounds"><span>0 m/s</span><span>+2.00 m/s</span></div></div>
 <div class="slider"><label for="vy">左移 / 右移 · vy <output id="vyout">0.00</output></label><input id="vy" type="range" min="0" max="1" step="0.01" value="0.2"><div class="bounds"><span>0 m/s</span><span>+1.00 m/s</span></div></div>
 <div class="slider"><label for="yaw">左转 / 右转 · yaw rate <output id="yawout">0.00</output></label><input id="yaw" type="range" min="0" max="3" step="0.01" value="0.4"><div class="bounds"><span>0 rad/s</span><span>+3.00 rad/s</span></div></div>
@@ -33,10 +33,10 @@ const sliders=['vx','vy','yaw'].map(id=>document.getElementById(id));
 const connection=document.getElementById('connection');
 let dirty=false,busy=false,actionQueue=[],dragging=false;
 let cameraDelta=[0,0,0],pointer=null,sceneInitialized=false;
-const keys=new Set(),motionKeys=new Set(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","KeyQ","KeyE"]);
+const keys=new Set(),motionKeys=new Set(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","KeyW","KeyA","KeyS","KeyD","KeyQ","KeyE"]);
 function command(){
- const x=Number(keys.has("ArrowUp"))-Number(keys.has("ArrowDown"));
- const y=Number(keys.has("ArrowLeft"))-Number(keys.has("ArrowRight"));
+ const x=Number(keys.has("ArrowUp")||keys.has("KeyW"))-Number(keys.has("ArrowDown")||keys.has("KeyS"));
+ const y=Number(keys.has("ArrowLeft")||keys.has("KeyA"))-Number(keys.has("ArrowRight")||keys.has("KeyD"));
  const z=Number(keys.has("KeyQ"))-Number(keys.has("KeyE"));
  const scale=Math.max(1,Math.hypot(x,y));
  return [Number(sliders[0].value)*x/scale,Number(sliders[1].value)*y/scale,Number(sliders[2].value)*z];

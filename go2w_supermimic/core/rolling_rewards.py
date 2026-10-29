@@ -13,12 +13,8 @@ def rolling_gate(scan, command):
   return flat * straight
 
 
-def wheel_bottom_height(state, default_q):
-  """Cylinder bottom relative to ground below the base, using Go2W XML FK.
-
-  Only used on near-flat ground by rolling_gate, not as obstacle clearance.
-  The cylinder is symmetric about its axle, so wheel phase is unnecessary.
-  """
+def wheel_geometry(state, default_q):
+  """Wheel centres in body coordinates and vertical cylinder half-extents."""
   q = (state[:,LEG_POS] + default_q).reshape(-1,4,3)
   hip, thigh, calf = q.unbind(-1)
   side = state.new_tensor([1.,-1.,1.,-1.])
@@ -31,6 +27,13 @@ def wheel_bottom_height(state, default_q):
   up = -torch.nn.functional.normalize(state[:,GRAVITY],dim=-1,eps=1e-6)
   axle_z = up[:,1:2]*hip.cos()+up[:,2:3]*hip.sin()
   radius_z = .086*(1.-axle_z.square()).clamp_min(1e-8).sqrt()+.026*axle_z.abs()
+  return point, radius_z
+
+
+def wheel_bottom_height(state, default_q):
+  """Wheel bottoms relative to the ground below the base (legacy v4/v5)."""
+  point, radius_z = wheel_geometry(state, default_q)
+  up = -torch.nn.functional.normalize(state[:,GRAVITY], dim=-1, eps=1e-6)
   return state[:,:1] + (point*up[:,None,:]).sum(-1) - radius_z
 
 

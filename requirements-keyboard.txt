@@ -1,0 +1,6 @@
+# Known runtime versions; Warp 1.14 uses CUDA 12 and works with the local driver.
+-e .[keyboard]
+mjlab==1.6.0
+mujoco==3.11.0
+mujoco-warp==3.11.0
+warp-lang==1.14.0
