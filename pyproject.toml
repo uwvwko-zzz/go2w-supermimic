@@ -27,4 +27,4 @@ keyboard = ["pygame>=2.5"]
 include = ["go2w_supermimic*"]
 
 [tool.setuptools.package-data]
-go2w_supermimic = ["core/gui.html", "robot/LICENSE_menagerie_go2", "robot/model/go2w.xml", "robot/model/README.md", "robot/model/assets/*"]
+go2w_supermimic = ["core/gui.html", "vision/gui.html", "robot/LICENSE_menagerie_go2", "robot/model/go2w.xml", "robot/model/README.md", "robot/model/assets/*"]

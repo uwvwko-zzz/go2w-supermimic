@@ -13,7 +13,8 @@ from go2w_supermimic.core.gui import ControlState, make_server
 
 def main():
   parser = argparse.ArgumentParser(description=__doc__)
-  parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
+  parser.add_argument("--checkpoint", type=Path)
+  parser.add_argument("--onnx", type=Path)
   parser.add_argument("--port", type=int, default=8765)
   parser.add_argument("--device", default="cpu")
   parser.add_argument("--terrain-kind", choices=("flat", "up", "down", "platform", "slope", "rubble"), default="rubble")
@@ -22,8 +23,14 @@ def main():
   parser.add_argument("--shadows", action="store_true", help="Enable costly shadows/reflections")
   parser.add_argument("--steps", type=int, default=0, help="Exit after N simulation steps; 0 means until Ctrl+C")
   args = parser.parse_args()
+  if args.checkpoint and args.onnx:
+    parser.error("Choose either --checkpoint or --onnx")
+  if args.onnx:
+    args.checkpoint = args.onnx
+  if args.checkpoint is None:
+    args.checkpoint = DEFAULT_CHECKPOINT
   if not args.checkpoint.is_file():
-    parser.error(f"Checkpoint not found: {args.checkpoint}")
+    parser.error(f"Model not found: {args.checkpoint}")
   if not 1 <= args.fps <= 50 or not 1 <= args.port <= 65535 or args.steps < 0:
     parser.error("Require fps 1..50, port 1..65535 and nonnegative steps")
   os.environ.setdefault("MUJOCO_GL", "egl")
@@ -40,11 +47,16 @@ def main():
   env = None
   worker = None
   try:
-    checkpoint = torch.load(args.checkpoint, map_location=args.device, weights_only=True)
-    actor = load_actor(checkpoint, args.device)
+    if args.onnx:
+      from onnx_gui_runtime import load_onnx
+      checkpoint, actor = load_onnx(args.onnx, vision=False)
+    else:
+      checkpoint = torch.load(args.checkpoint, map_location=args.device, weights_only=True)
+      actor = load_actor(checkpoint, args.device)
+    actor_wheel_vel = checkpoint.get("actor_wheel_vel", False) if args.onnx else actor.actor_wheel_vel
     # Retain only metadata required to rebuild a scene, not training tensors.
     checkpoint = {k: checkpoint[k] for k in ("format", "history", "config", "env_action_order", "dt", "step")}
-    checkpoint["actor_wheel_vel"] = actor.actor_wheel_vel
+    checkpoint["actor_wheel_vel"] = actor_wheel_vel
     def build_scene(kind, level):
       cfg = evaluation_env_cfg(checkpoint, level, kind)
       cfg.scene.num_envs = 1

@@ -1,0 +1,107 @@
+{
+  "format": "go2w-vision-policy-v2",
+  "history": 5,
+  "dt": 0.02,
+  "step": 30000,
+  "env_action_order": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+  ],
+  "camera": {
+    "width": 32,
+    "height": 18,
+    "fovy_deg": 60.0,
+    "pitch_down_deg": 20.0,
+    "position": [
+      0.32,
+      0.0,
+      0.08
+    ],
+    "near": 0.1,
+    "far": 4.0,
+    "noise_std": 0.01,
+    "dropout": 0.01
+  },
+  "config": {
+    "num_envs": 4096,
+    "iterations": 40000,
+    "buffer_len": 512,
+    "history": 5,
+    "wm_window": 8,
+    "wm_batch": 2048,
+    "wm_updates": 4,
+    "imag_batch": 1024,
+    "horizon": 16,
+    "warmup": 300,
+    "critic_epochs": 5,
+    "save_interval": 500,
+    "log_interval": 50,
+    "seed": 0,
+    "num_steps_per_env": 1,
+    "critic_minibatches": 4,
+    "archive_size": 100000,
+    "actor_ramp_iterations": 1000,
+    "lr_decay_iterations": 20000,
+    "actor_hold_iterations": 20000,
+    "actor_schedule_start": 0,
+    "lr": 0.0002,
+    "action_noise": 0.15,
+    "gamma": 0.99,
+    "lam": 0.95,
+    "compile_imagination": false,
+    "prioritized_replay": true,
+    "actor_lr_scale": 0.3,
+    "lr_final_frac": 0.2,
+    "actor_grad_clip_element": 0.1,
+    "wm_hidden": [
+      512,
+      512,
+      512
+    ],
+    "actor_hidden": [
+      256,
+      128,
+      64
+    ],
+    "critic_hidden": [
+      256,
+      128,
+      64
+    ],
+    "device": "cuda:0",
+    "terrain": true,
+    "terrain_revision": 7,
+    "command_curriculum": true,
+    "command_curriculum_start": 0,
+    "init_actor": "",
+    "resume": "",
+    "output": "/root/gpufree-data/go2w-vision/logs/high_platform_4096_seed0_20261030",
+    "context_dim": 466
+  },
+  "inputs": {
+    "proprioception": [
+      245
+    ],
+    "depth": [
+      1,
+      18,
+      32
+    ]
+  },
+  "output_action_dim": 16,
+  "actor_wheel_vel": false
+}

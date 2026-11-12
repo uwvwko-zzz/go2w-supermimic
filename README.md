@@ -86,12 +86,25 @@ export PYTHONPATH="$PWD"
 
 在浏览器打开终端输出的地址。默认从 `http://127.0.0.1:8765/` 开始，端口占用时自动尝试下一个。WASD 或方向键控制移动，Q/E 转向，空格停止；鼠标控制视角，界面中可切换地形与难度。按 `Ctrl+C` 退出。
 
+## 深度视觉任务
+
+视觉任务与上面的盲走任务使用独立入口和模型格式。视觉 Actor 除了本体观测历史，还接收默认 32 × 18 的深度图，经过卷积编码后输出动作。默认相机安装参数尚未针对实物标定。
+
+```bash
+export PYTHONPATH="$PWD"
+./scripts/train_vision.sh --help
+./scripts/play_vision_gui.sh --checkpoint /path/to/vision_model.pt --device cuda:0
+```
+
+视觉演示需要视觉模型检查点，不能直接使用盲走模型；界面支持 WASD、方向键及端口自动切换。可用 `GO2W_VISION_PYTHON` 指定 Python 解释器。
+
 ## 代码结构
 
 ```text
 go2w_supermimic/
 ├── core/    # 世界模型、策略、想象训练、经验回放与演示界面
 ├── env/     # 平地及复杂地形环境
+├── vision/  # 深度视觉任务、网络、训练及演示
 └── robot/   # Go2W 机器人配置与模型资产
 scripts/     # 训练与演示入口
 assert/      # 演示视频
